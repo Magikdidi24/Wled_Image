@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configuration WLED</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Configuration WLED</h1>
+        
+        <div class="section">
+            <h2>Taille de la matrice</h2>
+            <h3>Taille Standard</h3>
+            <div class="grid-buttons">
+                <button class="grid-button" data-size="8x8">8 × 8</button>
+                <button class="grid-button" data-size="16x16">16 × 16</button>
+                <button class="grid-button" data-size="8x32">8 × 32</button>
+            </div>
+            <h3>Taille Custom</h3>
+            <div class="grid-buttons_custom">
+                <input type="number" id="width" name="width" placeholder="Largeur" min="1"/>
+                <span>x</span>
+                <input type="number" id="height" name="height" placeholder="Hauteur" min="1"/>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Image</h2>
+            <div class="form-group">
+                <label for="image">Sélectionnez une image :</label>
+                <input type="file" id="image" accept="image/*">
+                <canvas id="imageCanvas" style="display: none;"></canvas>
+                <div id="preview" style="margin-top: 10px;"></div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Adresse IP</h2>
+            <div class="form-group">
+                <label for="ip">Adresse IP du dispositif WLED :</label>
+                <input type="text" id="ip" placeholder="192.168.1.100" pattern="^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$">
+            </div>
+        </div>
+
+        <div class="section">
+            <button id="sendButton" disabled class="send-button">Envoyer l'image</button>
+            <div id="status" class="status"></div>
+        </div>
+    </div>
+
+    <script>
+        var size;
+        var currentPixelMatrix = null;
+        const widthInput = document.getElementById('width');
+        const heightInput = document.getElementById('height');
+        const sendButton = document.getElementById('sendButton');
+        const statusDiv = document.getElementById('status');
+        
+        function updateCustomSize() {
+            if (widthInput.value && heightInput.value) {
+                document.querySelectorAll('.grid-button').forEach(b => b.classList.remove('selected'));
+                size = `${widthInput.value}x${heightInput.value}`;
+            }
+        }
+
+        widthInput.addEventListener('input', updateCustomSize);
+        heightInput.addEventListener('input', updateCustomSize);
+        
+        document.querySelectorAll('.grid-button').forEach(button => {
+            button.addEventListener('click', () => {
+                widthInput.value = '';
+                heightInput.value = '';
+                document.querySelectorAll('.grid-button').forEach(b => b.classList.remove('selected'));
+                button.classList.add('selected');
+                size = button.dataset.size;
+                if (!widthInput.value && !heightInput.value) {
+                    widthInput.value = size.split('x')[0];
+                    heightInput.value = size.split('x')[1];
+                }
+            });
+        });
+
+        function imageToPixelArray(img, targetWidth, targetHeight) {
+            const canvas = document.getElementById('imageCanvas');
+            const ctx = canvas.getContext('2d');
+            
+            canvas.width = targetWidth;
+            canvas.height = targetHeight;
+            
+            ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+            
+            const imageData = ctx.getImageData(0, 0, targetWidth, targetHeight);
+            const pixels = imageData.data;
+            
+            const matrix = [];
+            for (let y = 0; y < targetHeight; y++) {
+                const row = [];
+                for (let x = 0; x < targetWidth; x++) {
+                    const i = (y * targetWidth + x) * 4;
+                    row.push([
+                        pixels[i],
+                        pixels[i + 1],
+                        pixels[i + 2]
+                    ]);
+                }
+                matrix.push(row);
+            }
+            
+            return matrix;
+        }
+
+        async function sendImageToDevice(pixelMatrix, ipAddress) {
+            try {
+                statusDiv.textContent = "Envoi en cours...";
+                statusDiv.className = "status pending";
+
+                const width = pixelMatrix[0].length;
+                const height = pixelMatrix.length;
+                const totalLeds = width * height;
+
+                const ledColors = [];
+                for (let y = 0; y < height; y++) {
+                    for (let x = 0; x < width; x++) {
+                        const pixel = pixelMatrix[y][x];
+                        ledColors.push(pixel);
+                    }
+                }
+
+                const data = {
+                    on: true,
+                    bri: 255,
+                    seg: [{
+                        id: 0,
+                        start: 0,
+                        stop: totalLeds,
+                        col: ledColors,
+                        i: ledColors,
+                        frz: true
+                    }]
+                };
+
+                const response = await fetch(`http://${ipAddress}/json/state`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Erreur HTTP: ${response.status}`);
+                }
+
+                statusDiv.textContent = "Image envoyée avec succès !";
+                statusDiv.className = "status success";
+            } catch (error) {
+                console.error('Erreur lors de l\'envoi:', error);
+                statusDiv.textContent = `Erreur: ${error.message}`;
+                statusDiv.className = "status error";
+            }
+        }
+
+        const image = document.getElementById('image');
+        const preview = document.getElementById('preview');
+        
+        image.addEventListener('change', () => {
+            const file = image.files[0];
+            if (file) {
+                const reader = new FileReader();
+                
+                reader.onload = function(e) {
+                    const img = new Image();
+                    img.onload = function() {
+                        const targetWidth = parseInt(widthInput.value) || 16;
+                        const targetHeight = parseInt(heightInput.value) || 16;
+                        
+                        currentPixelMatrix = imageToPixelArray(img, targetWidth, targetHeight);
+                        
+                        preview.innerHTML = '';
+                        const canvas = document.getElementById('imageCanvas');
+                        preview.appendChild(canvas);
+                        canvas.style.display = 'block';
+                        canvas.style.width = '200px';
+                        canvas.style.height = '200px';
+                        canvas.style.imageRendering = 'pixelated';
+
+                        sendButton.disabled = false;
+                    };
+                    img.src = e.target.result;
+                };
+                
+                reader.readAsDataURL(file);
+            }
+        });
+
+        sendButton.addEventListener('click', async () => {
+            const ipAddress = document.getElementById('ip').value;
+            if (!ipAddress) {
+                statusDiv.textContent = "Veuillez entrer une adresse IP";
+                statusDiv.className = "status error";
+                return;
+            }
+            if (!currentPixelMatrix) {
+                statusDiv.textContent = "Veuillez d'abord sélectionner une image";
+                statusDiv.className = "status error";
+                return;
+            }
+            await sendImageToDevice(currentPixelMatrix, ipAddress);
+        });
+
+        document.getElementById('ip').addEventListener('input', function() {
+            const ip = this.value;
+            const valid = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(ip);
+            if (valid) {
+                const parts = ip.split('.');
+                const validParts = parts.every(part => parseInt(part) >= 0 && parseInt(part) <= 255);
+                this.setCustomValidity(validParts ? '' : 'Adresse IP invalide');
+            } else {
+                this.setCustomValidity('Format d\'adresse IP invalide');
+            }
+        });
+    </script>
+</body>
+</html>
